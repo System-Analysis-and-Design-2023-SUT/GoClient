@@ -3,7 +3,6 @@ package sadqueue
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"io"
 	"math/rand"
@@ -19,9 +18,14 @@ var (
 	mu       sync.Mutex
 )
 
+type SubscribeMessage struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
 func init() {
 	randIndex := rand.Intn(len(hosts))
-	liveHost = hosts[randIndex] // Initially, set the first host as live
+	liveHost = hosts[randIndex]
 }
 
 func checkHost(host string) error {
@@ -63,14 +67,14 @@ func getLiveHost() (string, error) {
 	return findLiveHost()
 }
 
-func Push(message string) error {
+func Push(key string, message string) error {
 	host, err := getLiveHost()
 	if err != nil {
 		return err
 	}
 
-	key := uuid.New().String()
-	resp, err := http.PostForm(fmt.Sprintf("%s/push?key=%s&values%s", host, key, message), nil)
+	//key := uuid.New().String()
+	resp, err := http.PostForm(fmt.Sprintf("%s/push?key=%s&value=%s", host, key, message), nil)
 
 	if err != nil {
 		return err
@@ -82,29 +86,29 @@ func Push(message string) error {
 	return nil
 }
 
-func Pull() (string, error) {
+func Pull() (string, string, error) {
 	host, err := getLiveHost()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	resp, err := http.Get(host + "/pull")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if resp.StatusCode != 200 {
-		return "", ErrPullFailed
+		return "", "", ErrPullFailed
 	}
 
 	var result map[string]string
 	err = json.NewDecoder(resp.Body).Decode(&result)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return result["value"], nil
+	return result["key"], result["value"], nil
 }
 
-func Subscribe() error {
+func Subscribe(f func(key string, value string)) error {
 	host, err := getLiveHost()
 	if err != nil {
 		return err
@@ -115,7 +119,11 @@ func Subscribe() error {
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != 101 {
+		err := ws.Close()
+		if err != nil {
+			return err
+		}
 		return ErrSubscribeFailed
 	}
 
@@ -136,7 +144,11 @@ func Subscribe() error {
 			if err != nil {
 				break
 			}
-			fmt.Print(string(message))
+			if string(message) != "You subscribe successfully" {
+				var msg SubscribeMessage
+				err = json.Unmarshal(message, &msg)
+				f(msg.Key, msg.Value)
+			}
 		}
 	}()
 	return nil
